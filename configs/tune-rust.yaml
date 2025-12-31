@@ -1,0 +1,23 @@
+project_name: "ray-tune-tutorial"
+
+# Ray Cluster Settings
+ray:
+  num_workers: 2  # Total GPUs available
+
+# Model Hyperparameters
+training:
+  model_name: "Qwen/Qwen2.5-Coder-1.5B-Instruct"
+  dataset_name: "bigcode/the-stack-smol:data/rust"
+  batch_size: 2
+  gradient_accumulation_steps: 1
+  learning_rate: 1e-6
+  num_epochs: 5
+  seq_length: 512
+
+  storage_path: "/data/home/bfr4xr/git/ray-tutorial/checkpoints/"
+
+# DeepSpeed Specifics (Partial config)
+deepspeed:
+  zero_stage: 2
+  bf16:
+    enabled: true
