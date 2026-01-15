@@ -11,10 +11,14 @@ training:
   batch_size: 2
   gradient_accumulation_steps: 1
   learning_rate: 1e-6
-  num_epochs: 5
+  num_epochs: 2
   seq_length: 512
 
-  storage_path: "/data/home/bfr4xr/git/ray-tutorial/checkpoints/"
+  # Use NFS shared storage (Option 1: requires PVC setup)
+  storage_path: "/mnt/shared/ray/checkpoints/"
+  
+  # Use in-memory checkpointing (Option 2: no persistence, simpler)
+  # storage_path: null
 
 # DeepSpeed Specifics (Partial config)
 deepspeed:

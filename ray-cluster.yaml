@@ -1,0 +1,164 @@
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: llm-cluster
+  namespace: default
+spec:
+  rayVersion: 2.52.0
+  # Head group specificationZ
+  headGroupSpec:
+    rayStartParams: {}
+    template:
+      spec:
+        securityContext:
+          fsGroup: 0      # write-permission for mounted volumes
+
+
+        # Mount configuration
+        volumes:
+        - name: workspace
+          emptyDir: {}
+        - name: env-config
+          configMap:
+            name: ray-train-config
+            items:
+            - key: pyproject.toml
+              path: pyproject.toml
+        - name: shared-storage
+          persistentVolumeClaim:
+            claimName: ray-checkpoints-pvc
+
+        # initialization
+        initContainers:
+        - name: sync-code
+          image: alpine/git:latest
+          env:
+          - name: GIT_SYNC_REPO
+            value: https://github.com/wonkyoc/ray-tutorial
+          - name: GIT_SYNC_BRANCH
+            value: main
+          command: ["/bin/sh", "-c"]
+          args:
+          - |
+            set -e
+            git clone --depth 1 -b "$GIT_SYNC_BRANCH" "$GIT_SYNC_REPO" /tmp/repo
+            cp -r /tmp/repo/src /tmp/repo/configs /code
+
+        # Head container specifications  
+        containers:
+        - name: ray-head
+          image: rayproject/ray:2.52.0-py312-gpu
+          env:
+          - name: RAY_RUNTIME_ENV_HOOK
+            value: ray._private.runtime_env.uv_runtime_env_hook.hook
+          - name: HUGGING_FACE_HUB_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: hf-token
+                key: hf_token
+          ports:
+          - containerPort: 6379
+            name: gcs-server
+          - containerPort: 8265 # Ray dashboard
+            name: dashboard
+          - containerPort: 10001
+            name: client
+          resources:
+            limits:
+              cpu: "1"
+              memory: "5Gi"
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+          volumeMounts:
+          - mountPath: /home/ray/training
+            name: env-config
+          - mountPath: /mnt/shared
+            name: shared-storage
+          - mountPath: /home/ray/workspace
+            name: workspace
+
+  # Worker group specifications
+  workerGroupSpecs:
+  - replicas: 2
+    minReplicas: 2
+    maxReplicas: 2
+    groupName: gpu-workers
+    rayStartParams:
+      num-gpus: "1"
+    template:
+      spec:
+        securityContext:
+          fsGroup: 0
+        containers:
+        - name: ray-worker
+          image: rayproject/ray:2.52.0-py312-gpu
+          env:
+          - name: HUGGING_FACE_HUB_TOKEN
+            valueFrom: 
+              secretKeyRef:
+                name: hf-token
+                key: hf_token
+          volumeMounts:
+          - mountPath: /mnt/shared
+            name: shared-storage
+          resources:
+            limits:
+              cpu: "8"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+              nvidia.com/gpu: "1"
+        volumes:
+        - name: shared-storage
+          persistentVolumeClaim:
+            claimName: ray-checkpoints-pvc
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ray-train-config
+data:
+  pyproject.toml: |
+    [project]
+    name = "llm-training"
+    version = "0.1.0"
+    description = "Add your description here"
+    readme = "README.md"
+    requires-python = ">=3.12"
+    dependencies = [
+        "anyscale>=0.26.80",
+        "datasets==3.6.0",
+        "deepspeed>=0.18.3",
+        "ray[default,data,serve,train,tune]==2.52.0",
+        "filelock>=3.20.1",
+        "torch==2.7.0",
+        "torchvision==0.22.0",
+        "tqdm>=4.67.1",
+        "transformers>=4.57.3",
+        "trl==0.23.1",
+        "wandb>=0.23.1",
+    ]
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: hf-token
+type: Opaque
+stringData:
+  hf_token: <your token>
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ray-checkpoints-pvc
+  namespace: default
+spec:
+  storageClassName: standard
+  accessModes:
+    - ReadWriteOnce  # Rank 0 only - local-path provisioner supports this
+  resources:
+    requests:
+      storage: 100Gi

@@ -3,27 +3,20 @@ train_llm.py
 ============
 A module for training large language models (LLMs) using Ray Train.
 
-Attributes:
-    module_level_variable1 (int): Module level variables may be documented in
-        either the ``Attributes`` section of the module docstring, or in an
-        inline docstring immediately following the variable.
-
-Todo:
-    * For module TODOs
-    * You have to also use ``sphinx.ext.todo`` extension
-
-:copyright: (c) 2025 by Wonkyo Choe.
+:copyright: (c) 2026 by Wonkyo Choe.
 :license: MIT, see LICENSE for more details.
 """
 
 
+from datetime import datetime
+import json
+import time
 from typing import Dict, Any
 import tempfile
 import uuid
 import os
+from pathlib import Path
 
-import deepspeed
-import torch
 
 import ray
 import ray.train
@@ -35,8 +28,39 @@ from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from datasets import load_dataset, DownloadConfig
 
+import torch
+import numpy as np
+
 # Configuration
 from config import load_config, ExperimentalConfig
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+class AuditLogger:
+    def __init__(self):
+        self.timings = {}
+
+    def log(self, phase, duration):
+        if phase not in self.timings:
+            self.timings[phase] = []
+        self.timings[phase].append(duration)
+
+    def summary(self):
+        summary = {}
+        for phase, duration in self.timings.items():
+            summary[phase] = {
+                'mean': np.mean(duration),
+                'std': np.std(duration),
+                'min': np.min(duration),
+                'max': np.max(duration),
+                'total': np.sum(duration),
+                'count': len(duration),
+            }
+        return summary
+    
+timer = AuditLogger()
 
 def setup_dataloader(model_name: str, dataset_name: str, seq_length: int, batch_size: int) -> DataLoader:
     # Load dataset
@@ -81,6 +105,7 @@ def report_metrics_and_save_checkpoint(
         checkpoint = None 
 
         if rank == 0:
+            start = time.time()
             checkpoint_dir = os.path.join(tmp_dir, "checkpoint")
             os.makedirs(checkpoint_dir, exist_ok=True)
 
@@ -90,6 +115,8 @@ def report_metrics_and_save_checkpoint(
             epoch_file = os.path.join(checkpoint_dir, "epoch.txt")
             with open(epoch_file, "w") as f:
                 f.write(str(epoch_value))
+            
+            timer.log("ckpt_saving", time.time() - start)
 
             checkpoint = Checkpoint.from_directory(checkpoint_dir)
             experiment_name = ctx.get_experiment_name()
@@ -110,10 +137,13 @@ def load_checkpoint(
             print(f"Loading checkpoint from {checkpoint_dir}")
             # Restore a checkpoint
             model_state_dict = torch.load(
-                os.path.join(checkpoint_dir, f"model.pt")
+                os.path.join(checkpoint_dir, "model.pt")
             )
 
-            model.module.load_state_dict(model_state_dict)
+            if hasattr(model, 'module'):
+                model.module.load_state_dict(model_state_dict)
+            else:
+                model.load_state_dict(model_state_dict)
 
             epoch_file = os.path.join(checkpoint_dir, "epoch.txt")
             # Read last epoch
@@ -129,30 +159,41 @@ def load_checkpoint(
 
 def train_loop(config: Dict[str, Any]) -> None:
     # Setup dataloader
+    start = time.time()
     train_loader = setup_dataloader(config["model_name"], config["dataset_name"], config["seq_length"], config["batch_size"])
     steps_per_epoch = len(train_loader)
+    timer.log("data_preparation", time.time() - start)
 
     # Setup a model
+    start = time.time()
     model = AutoModelForCausalLM.from_pretrained(config["model_name"])
     model = ray.train.torch.prepare_model(model)
+
+    timer.log("model_loading", time.time() - start)
 
     # Define a loss function
     # This won't be used because the model internally calcaulates the loss
     # loss_fn = torch.nn.CrossEntropyLoss()
 
     # Define an optimizer
+    start = time.time()
     optimizer = torch.optim.AdamW(model.parameters(), lr=config["learning_rate"])
+    timer.log("optimizer_setup", time.time() - start)
 
     # Load an existing checkpoint if available
+    start = time.time()
     start_epoch = 0
     ckpt = ray.train.get_checkpoint()
     if ckpt:
         start_epoch, model = load_checkpoint(model, ckpt)
+    timer.log("ckpt_loading", time.time() - start)
 
     # Get a device info
     device = ray.train.torch.get_device()
-    
+
     for epoch in range(start_epoch, config["epochs"]):
+        epoch_start = time.time()
+
         model.train()
         if ray.train.get_context().get_world_size() > 1 and hasattr(train_loader, "sampler"):
             sampler = getattr(train_loader, "sampler", None)
@@ -162,14 +203,21 @@ def train_loop(config: Dict[str, Any]) -> None:
         num_batches = 0
 
         for step, batch in enumerate(train_loader):
+            data_transfer_start = time.time()
             input_ids = batch['input_ids'].to(device)
             attention_mask = batch['attention_mask'].to(device)
+            timer.log("data_transfer", time.time() - data_transfer_start)
+
+            forward_start = time.time()
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=input_ids)
             loss = outputs.loss
+            timer.log("forward_pass", time.time() - forward_start)
             print(f"Epoch {epoch}, Step {step + 1}/{steps_per_epoch}, Loss: {loss.item()}")
 
             optimizer.zero_grad()
+            backward_start = time.time()
             loss.backward()
+            timer.log("backward_pass", time.time() - backward_start)
             optimizer.step()
 
             running_loss += loss.item()
@@ -178,12 +226,36 @@ def train_loop(config: Dict[str, Any]) -> None:
             if step + 1 >= config.get("tutorial_steps", steps_per_epoch):
                 print(f"Reached tutorial steps limit at step {step + 1}. Ending epoch early.")
                 break
-        
+
+        timer.log("epoch_training", time.time() - epoch_start)
         report_metrics_and_save_checkpoint(model, {"loss": running_loss / num_batches, "epoch": epoch})
+
+    if ray.train.get_context().get_world_rank() == 0:
+        audit_summary = timer.summary()
+        print("\n=== Training phase timing breakdown ===")
+        for phase, stats in audit_summary.items():
+            print(f"{phase}:")
+            print(f"mean={stats['mean']:.4f}s")
+            print(f"std={stats['std']:.4f}s")
+            print(f"min={stats['min']:.4f}s")
+            print(f"max={stats['max']:.4f}s")
+            print(f"total={stats['total']:.4f}s over {stats['count']} calls")
+            print("-----------------------------------")
+        
+        with open("/mnt/shared/ray/training_timing_audit.txt", "w") as f:
+            json.dump({
+                'timestamp': datetime.now().isoformat(),
+                'audit_summary': audit_summary
+            }, f, indent=2)
+
 
 
 if __name__ == "__main__":
-    config = load_config("configs/tune-rust.yaml")
+    # Connect to Ray Cluster
+    ray.init(address="auto")
+
+    config_path = PROJECT_ROOT / "configs" / "tune-rust.yaml"
+    config = load_config(str(config_path))
 
     scaling_config = ScalingConfig(num_workers=config.ray.num_workers, use_gpu=config.ray.use_gpu > 0)
 
@@ -211,4 +283,6 @@ if __name__ == "__main__":
     )
 
     result = trainer.fit()
+
+
     print(f"Training finished. Result: {result}")

@@ -9,7 +9,7 @@ dependencies = [
     "datasets==3.6.0",
     "deepspeed>=0.18.3",
     "filelock>=3.20.1",
-    "ray[data,serve,train,tune]>=2.53.0",
+    "ray[default,data,serve,train,tune]==2.52.0",
     "torch==2.7.0",
     "torchvision==0.22.0",
     "tqdm>=4.67.1",
