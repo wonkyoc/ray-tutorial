@@ -1,15 +1,15 @@
 # KubeRay Tutorial
 
-## Current architecutre
+## Current architecture
 
 ![images/architecture.png](images/architecture.png)
-## Setup Ray Cluster
+## Set up a Ray cluster
 
-The cluster is already running on our lab server `xsel02`. Therefore, setting is not necessary at this point. You might need the below commands to build a cluster from scratch.
+The cluster already runs on lab server `xsel02`. Use the steps below only when rebuilding from scratch.
 
 **Step 1: Create containers**
 
-This creates a default cluster with 1 worker node with access to all GPUs on the machine. To use GPUs, we use [nvkind](https://github.com/NVIDIA/nvkind)
+Creates a default cluster with one worker that can access all GPUs. We use [nvkind](https://github.com/NVIDIA/nvkind) for GPU-enabled kind clusters.
 
 ```shell
 nvkind cluster create
@@ -22,7 +22,7 @@ nvkind cluster list
 nvkind-pl6w2
 ```
 
-Print the set of GPUs available on all nodes of a cluster (include a `--name` flag to select a specific cluster, or omit it to run against the current kubecontext):
+Print GPUs across all nodes (add `--name` to target a specific cluster, or use the current kubecontext):
 
 ```shell
 nvkind cluster print-gpus
@@ -47,9 +47,9 @@ nvkind cluster print-gpus
 
 **Step 3: Launch KubeRay operator**
 
-A operator connects a Ray cluster and k8s containers.
+The operator links Ray clusters to Kubernetes.
 
-**Step 3-1: Add the kuberay repo (this can be skipped b/c already done)**
+**Step 3-1: Add the kuberay repo (already added on lab server)**
 
 ```shell
 helm repo add kuberay https://ray-project.github.io/kuberay-helm/
@@ -73,7 +73,7 @@ kuberay-operator-6bc45dd644-gwtqv   1/1     Running   0          24s
 
 **Step 4: Launch GPU operator**
 
-The GPU Operator allows administrators of Kubernetes clusters to manage GPU nodes just like CPU nodes in the cluster.
+The GPU Operator makes GPUs schedulable as `nvidia.com/gpu` resources.
 
 **Step 4-1: Add the NVIDIA Helm repository**  
 
@@ -90,13 +90,13 @@ helm install --wait --generate-name \
     nvidia/gpu-operator
 ```
 
-After installation, the GPU Operator and its operands should be up and running. This takes a while (around 5-10 mins).
+Allow 5–10 minutes for the operator and operands to become ready.
 
-**Step 5: Setup ray pods**
+**Step 5: Set up Ray pods**
 
-**Step 5-0: Input a HF token & build pods**
+**Step 5-0: Add HF token and build pods**
 
-Before executing the build cmd, please edit `ray-cluster.yaml` and put your huggingface secret token.
+Before applying, edit `ray-cluster.yaml` with your Hugging Face token.
 
 ```
 vim ray-cluster.yaml
@@ -110,7 +110,7 @@ stringData:
   hf_token: <your token>
 ```
 
-and then execute the following cmd
+Then apply the manifest:
 
 ```shell
 kubectl apply -f ray-cluster.yaml
@@ -118,7 +118,7 @@ kubectl apply -f ray-cluster.yaml
 
 **Step 5-1: Check the running pods**
 
-Please make sure your cluster is `READY 1/1`. This indicates your pods are initialized w/o errors.
+Ensure each pod shows `READY 1/1`, indicating clean initialization.
 
 ```shell
 kubectl get pods
@@ -137,7 +137,7 @@ llm-cluster-gpu-workers-worker-j9k9s   1/1     Running   0          47h     10.2
 llm-cluster-head-v29mn                 1/1     Running   0          47h     10.244.1.44   nvkind-pl6w2-worker   <none>           <none>
 ```
 
-**Step 5-2 (optional): Check the running node (Kubernetes containers)**
+**Step 5-2 (optional): Check nodes**
 
 ```shell
 kubectl get node
@@ -147,7 +147,7 @@ nvkind-pl6w2-control-plane   Ready    control-plane   2d22h   v1.35.0
 nvkind-pl6w2-worker          Ready    <none>          2d22h   v1.35.0
 ```
 
-**Step 5-3 (optional): Retrieve verbose information about k8s resources**
+**Step 5-3 (optional): Describe nodes for detail**
 
 ```shell
 kubectl describe node
@@ -159,9 +159,9 @@ Labels:             beta.kubernetes.io/arch=amd64
 ...
 ```
 
-## Submit  a Ray training job
+## Submit a Ray training job
 
-**Step 1: Access to the head node**
+**Step 1: Access the head node**
 
 ```shell
 kubectl exec --stdin --tty <your-head-node> -- /bin/bash
@@ -174,7 +174,7 @@ kubectl exec --stdin --tty llm-cluster-head-v29mn -- /bin/bash
 
 **Step 2: Copy pyproject.toml**
 
-This command should be executed inside **the head node**
+Run this inside **the head node**
 
 ```shell
 pwd
@@ -196,11 +196,11 @@ Job submission server address: http://10.244.1.44:8265
 2026-01-17 17:48:23,225 INFO packaging.py:588 -- Creating a file package for local module '.'.
 ```
 
-I am using `uv` to easily install any dependency across pods (e.g., workers). I will update the details soon.
+`uv` keeps dependencies consistent across pods (e.g., workers). Details to be expanded soon.
 
 - https://www.anyscale.com/blog/uv-ray-pain-free-python-dependencies-in-clusters
 
-**Step 4: check the training or pod status via port-foward**
+**Step 4: Check training or pod status via port-forward**
 
 ```shell
 kubectl port-forward <your-head-node> 8265:8265
@@ -209,7 +209,7 @@ kubectl port-forward <your-head-node> 8265:8265
 kubectl port-forward svc/llm-cluster-head-svc 8265:8265
 ```
 
-If you use VS Code, you can simply see the Ray dashboard via port-fowarding. See the screenshot below:
+In VS Code, open the Ray dashboard after port-forwarding. Example view:
 
 ![image](images/vscode-port.png)
 
@@ -221,7 +221,7 @@ kubectl cp <file or dir> <head-node>:/home/ray/
 
 ## Checkpoints
 
-Our cluster has a local storage built by `PVC`, which stands for PermanentVolumeClaim. This storage is shared across the head and worker nodes in `/mnt/shared`. The information can be found in `ray-cluster.yaml`
+The cluster uses PVC-backed shared storage at `/mnt/shared`, defined in `ray-cluster.yaml`.
 
 ```shell
 apiVersion: v1
@@ -240,26 +240,26 @@ spec:
 
 ## Serving (TBD)
 
-**Step 1: launch a script**
+Build and serve the LLM application:
 
 ```shell
 serve build llm-serve.yaml
 ```
 
-This is currently not working due to a random error in vLLM. Will be fixed.
+Currently blocked by an intermittent vLLM error.
 
-##  Termination
+## Termination
 
-**Step 1: Clean Ray pods**
+**Step 1: Remove Ray pods**
 
 ```shell
 kubectl delete raycluster llm-cluster 
 ```
 
 - `raycluster`: CRD (Custom Resource Definition) in k8s
-- `llm-cluster`:  a Ray cluster name defined in a yaml file
+- `llm-cluster`: Ray cluster name defined in the YAML
 
-**Step 2: Clean k8s containers**
+**Step 2: Remove kind clusters**
 
 ```shell
 for cluster in $(kind get clusters); do kind delete cluster --name=${cluster}; done
@@ -272,17 +272,10 @@ $HOME = /home/ray
 $TMP = /tmp/ray (This variable is not actually set)
 ```
 
-## Trouble-shooting
-### GPUs seem not available
+## Troubleshooting
+### GPUs not available
 
-```shell
-VERSION:
-   1.18.1
-commit: efe99418ef87500dbe059cadc9ab418b2815b9d5
-```
-
-
-Docker originally does not configure GPU environment.
+Docker may lack GPU configuration if you see a message like:
 
 ```bash
 message: 
@@ -290,7 +283,7 @@ message:
 ''llms'' has 1 replicas that have taken more than 30s to be scheduled. This may be due to waiting for the cluster to auto-scale or for a runtime environment to be installed. Resources required for each replica: [{"CPU": 1.0, "GPU": 1.0}], total resources available: {}. Use `ray status` for more details.'
 ```
 
-Check your available resource:
+Then check available resources:
 
 ```bash
 kubectl get nodes -o json | grep -A 10 "allocatable"
@@ -306,8 +299,18 @@ kubectl get nodes -o json | grep -A 10 "allocatable"
 },
 ```
 
-If there is available GPU resource, but they are not seen in the result, your cluster nodes do not have the NVIDI GPU device plugin installed. Kubernetes does not automatically detect GPUs; therefore, you need to install the NVIDIA device plugin to make GPUs available as `nvidia.com/gpu` resource.
+If host GPUs exist but are absent in logs, install the NVIDIA device plugin (`gpu-operator`) so GPUs appear as `nvidia.com/gpu`.
 
+> Note: `nvidia-ctk` 1.18.1 is unstable; prefer 1.17.1.
 
+```shell
+# This fails to umount
+VERSION:
+   1.18.1
+commit: efe99418ef87500dbe059cadc9ab418b2815b9d5
 
-_Tags for Search: #ray #tutorial
+# This works
+VERSION:
+   1.17.1
+commit: 1467f3f339a855f20d179e9883e418a09118a93e
+```
