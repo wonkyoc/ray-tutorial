@@ -1,0 +1,21 @@
+# serve-config.yaml
+applications:
+- name: llms
+  import_path: ray.serve.llm:build_openai_app
+  route_prefix: "/"
+  args:
+    llm_configs:
+    - model_loading_config:
+        model_id: qwen2.5-7b-instruct
+        model_source: Qwen/Qwen2.5-7B-Instruct
+      engine_kwargs:
+        dtype: bfloat16
+        max_model_len: 1024
+        device: auto
+        gpu_memory_utilization: 0.75
+      deployment_config:
+        autoscaling_config:
+          min_replicas: 1
+          max_replicas: 2
+          target_ongoing_requests: 64
+        max_ongoing_requests: 128
