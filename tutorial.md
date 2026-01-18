@@ -2,7 +2,7 @@
 
 ## Current architecutre
 
-![[images/architecture.png]]
+![images/architecture.png](images/architecture.png)
 ## Setup Ray Cluster
 
 The cluster is already running on our lab server `xsel02`. Therefore, setting is not necessary at this point. You might need the below commands to build a cluster from scratch.
@@ -211,7 +211,7 @@ kubectl port-forward svc/llm-cluster-head-svc 8265:8265
 
 If you use VS Code, you can simply see the Ray dashboard via port-fowarding. See the screenshot below:
 
-![[images/Pasted image 20260117201147.png]]
+![image](images/vscode-port.png)
 
 **(Optional): Copy files or directories from the local to the pod**
 
