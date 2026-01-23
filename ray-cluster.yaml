@@ -5,7 +5,7 @@ metadata:
   namespace: default
 spec:
   rayVersion: 2.52.0
-  # Head group specificationZ
+  # Head group specification
   headGroupSpec:
     rayStartParams: {}
     template:
@@ -156,7 +156,7 @@ metadata:
   name: hf-token
 type: Opaque
 stringData:
-  hf_token: <your token>
+  hf_token: <secret key> # Replace with your actual Hugging Face token, e.g.,
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

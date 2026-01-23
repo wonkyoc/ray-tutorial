@@ -1,0 +1,319 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: llama-31-8b-sglang
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 30Gi
+  storageClassName: standard
+  volumeMode: Filesystem
+---
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: nvidia
+handler: nvidia
+---
+# Prefill Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sglang-pd-prefill
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: sglang-pd-prefill
+  template:
+    metadata:
+      labels:
+        app: sglang-pd-prefill
+        mode: prefill
+        engine: sglang-pd
+    spec:
+      restartPolicy: Always
+      runtimeClassName: nvidia
+      containers:
+        - name: sglang-prefill
+          image: docker.io/lmsysorg/sglang:v0.5.6
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+            - containerPort: 8998
+          command: ["python3", "-m", "sglang.launch_server"]
+          args:
+            [
+              "--model-path",
+              "meta-llama/Llama-3.1-8B-Instruct",
+              "--disaggregation-transfer-backend",
+              "nixl",
+              "--host",
+              "0.0.0.0",
+              "--port",
+              "8000",
+              "--disaggregation-mode",
+              "prefill",
+            ]
+          env:
+            - name: HF_TOKEN
+              value: <secret key>
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+              cpu: 12
+              memory: 48Gi
+            requests:
+              cpu: 4
+              memory: 24Gi
+              nvidia.com/gpu: 1
+          volumeMounts:
+            - name: shm
+              mountPath: /dev/shm
+            - name: hf-cache
+              mountPath: /root/.cache/huggingface
+            - name: localtime
+              mountPath: /etc/localtime
+              readOnly: true
+          livenessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 10
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 10
+            successThreshold: 1
+      volumes:
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 20Gi
+        - name: hf-cache
+          persistentVolumeClaim:
+            claimName: llama-31-8b-sglang
+        - name: localtime
+          hostPath:
+            path: /etc/localtime
+            type: File
+---
+# Decode Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sglang-pd-decode
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: sglang-pd-decode
+  template:
+    metadata:
+      labels:
+        app: sglang-pd-decode
+        mode: decode
+        engine: sglang-pd
+    spec:
+      restartPolicy: Always
+      runtimeClassName: nvidia
+      containers:
+        - name: sglang-decode
+          image: docker.io/lmsysorg/sglang:v0.5.6
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8001
+          command: ["python3", "-m", "sglang.launch_server"]
+          args:
+            [
+              "--model-path",
+              "meta-llama/Llama-3.1-8B-Instruct",
+              "--disaggregation-transfer-backend",
+              "nixl",
+              "--host",
+              "0.0.0.0",
+              "--port",
+              "8001",
+              "--disaggregation-mode",
+              "decode",
+            ]
+          env:
+            - name: HF_TOKEN
+              value: <secret key>
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+              cpu: 12
+              memory: 48Gi
+            requests:
+              cpu: 4
+              memory: 24Gi
+              nvidia.com/gpu: 1
+          volumeMounts:
+            - name: shm
+              mountPath: /dev/shm
+            - name: hf-cache
+              mountPath: /root/.cache/huggingface
+            - name: localtime
+              mountPath: /etc/localtime
+              readOnly: true
+          livenessProbe:
+            tcpSocket:
+              port: 8001
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 10
+          readinessProbe:
+            tcpSocket:
+              port: 8001
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 10
+            successThreshold: 1
+      volumes:
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 20Gi
+        - name: hf-cache
+          persistentVolumeClaim:
+            claimName: llama-31-8b-sglang
+        - name: localtime
+          hostPath:
+            path: /etc/localtime
+            type: File
+---
+# Router Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sglang-pd-router
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: sglang-pd-router
+  template:
+    metadata:
+      labels:
+        app: sglang-pd-router
+        mode: router
+        engine: sglang-pd
+    spec:
+      restartPolicy: Always
+      containers:
+        - name: sglang-router
+          image: docker.io/lmsysorg/sglang:v0.5.6
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+          command: ["python3", "-m", "sglang_router.launch_router"]
+          args:
+            [
+              "--pd-disaggregation",
+              "--prefill",
+              "http://sglang-pd-prefill:8000",
+              "--decode",
+              "http://sglang-pd-decode:8001",
+              "--host",
+              "0.0.0.0",
+              "--port",
+              "8000",
+            ]
+          resources:
+            limits:
+              cpu: 4
+              memory: 16Gi
+            requests:
+              cpu: 4
+              memory: 16Gi
+          volumeMounts:
+            - name: localtime
+              mountPath: /etc/localtime
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+            successThreshold: 1
+      volumes:
+        - name: localtime
+          hostPath:
+            path: /etc/localtime
+            type: File
+---
+# Service for Prefill (Headless for direct pod access)
+apiVersion: v1
+kind: Service
+metadata:
+  name: sglang-pd-prefill
+spec:
+  clusterIP: None
+  selector:
+    app: sglang-pd-prefill
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8000
+      targetPort: 8000
+    - name: bootstrap
+      protocol: TCP
+      port: 8998
+      targetPort: 8998
+---
+# Service for Decode (Headless for direct pod access)
+apiVersion: v1
+kind: Service
+metadata:
+  name: sglang-pd-decode
+spec:
+  clusterIP: None
+  selector:
+    app: sglang-pd-decode
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8001
+      targetPort: 8001
+---
+# Service for Router (exposed externally)
+apiVersion: v1
+kind: Service
+metadata:
+  name: sglang-pd-router
+spec:
+  selector:
+    app: sglang-pd-router
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 8000
+  type: LoadBalancer

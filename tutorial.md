@@ -238,12 +238,88 @@ spec:
       storage: 100Gi
 ```
 
-## Serving (TBD)
+## Serving
+Our serving system directly utilizes k8s to minimize performance overheads from virtual machines.
 
-Build and serve the LLM application:
+### Tensor parallelism
+
+![image](images/tp-arch.png)
+
+**Step 1: Deploy serving pods**
 
 ```shell
-serve build llm-serve.yaml
+kubectl apply -f k8s-sglang-tp.yaml
+```
+
+**Step 2: Check the pod status. If `REDAY` is `1/1`, the pod is ready.**
+
+```shell
+kubectl get pod -l app=meta-llama-31-8b-instruct-sglang
+NAME                                               READY   STATUS    RESTARTS      AGE
+meta-llama-31-8b-instruct-sglang-ccd9bd759-rwgc4   0/1     Running   0             1m
+```
+
+**Step 3: Port-forward for router**
+```shell
+kubectl port-forward svc/meta-llama-31-8b-instruct-sglang 30000:30000
+```
+
+**Step 4: Test a request**
+```shell
+curl http://localhost:30000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "meta-llama/Llama-3.2-3B-Instruct",
+    "messages": [
+      {"role": "user", "content": "Hello, how are you?"}
+    ],
+    "temperature": 0.7,
+    "max_tokens": 100
+  }'
+```
+
+### PD Disaggregation
+
+![image](images/pd-arch.png)
+
+**Step 1: Deploy serving pods**
+```shell
+kubectl apply -f k8s-sglang-pd.yaml
+```
+
+**Step 2: Check the pod status. If `REDAY` is `1/1`, the pod is ready.**
+
+```shell
+kubectl get pods
+NAME                                 READY   STATUS    RESTARTS      AGE
+sglang-pd-decode-849c5b95c8-s66jm    0/1     Pending   0             3s
+sglang-pd-prefill-6b64567577-qfvkr   0/1     Pending   0             3s
+sglang-pd-router-6ccf5df69f-mjhhs    0/1     Running   0             3s
+```
+
+**Step 3: Port-forward for router**
+```shell
+kubectl port-forward svc/sglang-pd-router 8000:8000
+```
+
+**Step 4: Test a request**
+```shell
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "meta-llama/Llama-3.2-3B-Instruct",
+    "messages": [
+      {"role": "user", "content": "Hello, how are you?"}
+    ],
+    "temperature": 0.7,
+    "max_tokens": 100
+  }'
+```
+
+## Deletion
+
+```shell
+kubectl delete -f <your file>.yaml
 ```
 
 Currently blocked by an intermittent vLLM error.
@@ -263,13 +339,6 @@ kubectl delete raycluster llm-cluster
 
 ```shell
 for cluster in $(kind get clusters); do kind delete cluster --name=${cluster}; done
-```
-
-## Inside the head node
-
-```shell
-$HOME = /home/ray
-$TMP = /tmp/ray (This variable is not actually set)
 ```
 
 ## Troubleshooting
